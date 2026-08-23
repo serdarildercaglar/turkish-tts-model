@@ -1,0 +1,26 @@
+# Kopyala: cp configs/train.example.yaml configs/train.yaml  (train.yaml gitignore'da)
+# Yollari kendi makinene gore doldur.
+
+tokenizer_dir: artifacts/tokenizer
+packed_dir: artifacts/packed
+model_config: configs/model_95m.json
+output_dir: ckpt
+
+micro_batch: 16
+grad_accum: 4
+epochs: 8
+lr: 3.0e-4
+warmup_steps: 1000
+weight_decay: 0.1
+save_steps: 2000
+save_total_limit: 4
+logging_steps: 50
+num_workers: 4
+seed: 42
+report_to: none
+
+# Degerlendirme
+eval_set: artifacts/eval_set.jsonl
+whisper_url: http://localhost:8000        # OpenAI-uyumlu Whisper servisi
+whisper_model: openai/whisper-large-v3-turbo
+dnsmos_onnx: ""                            # sig_bak_ovr.onnx yolu (istege bagli)

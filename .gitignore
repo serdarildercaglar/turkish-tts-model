@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+.venv/
+artifacts/
+ckpt/
+eval/
+export/
+runs/
+wandb/
+*.npz
+*.bin
+*.wav
+configs/train.yaml

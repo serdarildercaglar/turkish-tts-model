@@ -1,0 +1,13 @@
+torch>=2.4
+transformers>=4.46
+tokenizers>=0.20
+snac>=1.2
+numpy
+soundfile
+torchaudio
+pyyaml
+requests
+# degerlendirme (istege bagli)
+onnxruntime
+librosa
+pyannote.audio
