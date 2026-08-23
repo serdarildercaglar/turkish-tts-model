@@ -94,26 +94,38 @@ class SpeakerEmbedder:
 
 
 class DNSMOS:
+    """Ham dalga biçimli sig_bak_ovr.onnx — veri hattının dnsmos aşamasıyla
+    birebir aynı pencereleme (9,01 sn, 1 sn kaydırma) ve polinom eşleme."""
+
+    SR = 16000
+    WIN = int(9.01 * SR)
+    P_OVR = np.poly1d([-0.06766283, 1.11546468, 0.04602535])
+
     def __init__(self, onnx_path: str):
         import onnxruntime as ort
 
         self.sess = ort.InferenceSession(onnx_path,
                                          providers=["CPUExecutionProvider"])
+        self.input_name = self.sess.get_inputs()[0].name
 
     def ovrl(self, wav: np.ndarray, sr: int) -> float:
-        import librosa
+        import torchaudio.functional as AF
 
-        x = librosa.resample(wav.astype(np.float32), orig_sr=sr, target_sr=16000)
-        x = x[: 16000 * 9]
-        if len(x) < 16000 * 9:
-            x = np.pad(x, (0, 16000 * 9 - len(x)))
-        mel = librosa.feature.melspectrogram(y=x, sr=16000, n_fft=321,
-                                             hop_length=161, n_mels=120)
-        mel = (librosa.power_to_db(mel, ref=1.0, amin=1e-10) + 40) / 40
-        inp = mel.T[None].astype(np.float32)
-        raw = self.sess.run(None, {self.sess.get_inputs()[0].name: inp})[0][0]
-        p = np.poly1d([-0.00533021, 0.005101, 1.18058466, -0.11236046])
-        return float(p(raw[2]))
+        x = wav.astype(np.float32)
+        if sr != self.SR:
+            x = AF.resample(torch.from_numpy(x), sr, self.SR).numpy()
+        if x.size < self.WIN:
+            reps = int(np.ceil(self.WIN / max(x.size, 1)))
+            wins = [np.tile(x, reps)[: self.WIN]]
+        else:
+            wins = [x[s : s + self.WIN]
+                    for s in range(0, x.size - self.WIN + 1, self.SR)]
+        raws = []
+        for s in range(0, len(wins), 8):
+            batch = np.stack(wins[s : s + 8]).astype(np.float32)
+            raws.append(self.sess.run(None, {self.input_name: batch})[0])
+        raw = np.concatenate(raws).mean(axis=0)
+        return float(self.P_OVR(raw[2]))
 
 
 def main() -> None:
