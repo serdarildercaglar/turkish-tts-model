@@ -10,16 +10,17 @@ tags:
 - turkish
 - speech-lm
 - snac
-- vllm
+- vllm-omni
 ---
 
 # turkish-tts-model
 
 Türkçe metinden konuşma sentezi için sıfırdan eğitilmiş ~95M parametreli
 konuşma dil modeli: stok `LlamaForCausalLM`, SNAC 24 kHz codec tokenları
-üzerinde otoregresif üretim, zero-shot ses klonlama. **vLLM ile doğrudan
-servis edilir** (`vllm serve`); ses tokenları `<custom_token_N>` biçiminde
-metin olarak üretilir ve istemci tarafında SNAC ile 24 kHz sese çözülür.
+üzerinde otoregresif üretim, zero-shot ses klonlama. **vllm-omni ile
+`/v1/audio/speech` olarak servis edilir** (`vllm serve <model> --omni`,
+akışlı çıkış, `ref_audio` klonlama); ses tokenları `<custom_token_N>` biçiminde
+gerçek tokenlardır, SNAC çözücü aşaması bunları 24 kHz sese çevirir.
 
 Eğitim ve çıkarım kodu:
 https://github.com/serdarildercaglar/turkish-tts-model

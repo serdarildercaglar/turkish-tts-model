@@ -2,8 +2,8 @@
 
 Metin BPE, ses tokenları ve özel tokenlar tek embedding tablosunu paylaşır.
 Ses tokenları tokenizer'da `<custom_token_N>` adlı GERÇEK tokenlardır;
-vLLM bu sayede ek kod olmadan onları metin olarak üretebilir ve istemci
-tarafında ayrıştırılırlar.
+vLLM motoru (vllm-omni'nin AR aşaması) bu sayede onları sıradan token olarak
+üretir; SNAC çözücü aşaması ya da istemci `N`'i koda çevirir.
 """
 from src.codec import AUDIO_VOCAB
 

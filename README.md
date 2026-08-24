@@ -1,8 +1,8 @@
 # turkish-tts-model
 
 Türkçe metinden konuşma sentezi için **sıfırdan eğitilen**, ~95M parametreli,
-**vLLM ile doğrudan servis edilebilen**, ses klonlamalı bir konuşma dil
-modeli. Eğitim verisi:
+**vllm-omni ile `/v1/audio/speech` olarak servis edilen**, ses klonlamalı,
+gerçek zamanlı IVR hedefli bir konuşma dil modeli. Eğitim verisi:
 [`serdarcaglar/turkish-tts-audiobooks`](https://huggingface.co/datasets/serdarcaglar/turkish-tts-audiobooks)
 (1.292 saat temiz Türkçe okuma konuşması; hattı da açık:
 [turkish-tts-audiobooks](https://github.com/serdarildercaglar/turkish-tts-audiobooks)).
@@ -17,9 +17,9 @@ modeli, sözlüğü ses tokenlarıyla genişletilmiş:
   (Orpheus şeması), ~83 token/saniye. Korpus 16 kHz olduğundan giriş 24 kHz'e
   yeniden örneklenir; çıkış 24 kHz'tir.
 - **Sözlük (36.928):** 8.192 Türkçe BPE (korpustan eğitilir) + 28.672 ses
-  tokenı (`<custom_token_N>` — vLLM'in metin olarak üretebilmesi için gerçek
-  tokenlar) + özel tokenlar.
-- **Model:** hidden 640 / 14 katman / 10 başlık / FFN 1792, RoPE, bağlı
+  tokenı (`<custom_token_N>` — vLLM motorunun sıradan token olarak
+  üretebilmesi için gerçek tokenlar) + özel tokenlar.
+- **Model:** hidden 640 / 14 katman / 10 başlık (GQA, 2 KV başı) / FFN 2176, RoPE, bağlı
   embedding → ~95M parametre (`configs/model_95m.json`; 74M ve 145M
   varyantları da var).
 - **İstem biçimi:**
@@ -68,9 +68,11 @@ python infer.py --model ckpt/final --tokenizer artifacts/tokenizer \
     --ref-audio ref.wav --ref-text "Referans kaydın transkripti." --out klon.wav
 ```
 
-vLLM ile servis: [docs/serving_vllm.md](docs/serving_vllm.md) — checkpoint
-stok Llama olduğu için `vllm serve <model>` doğrudan çalışır; istemci
-`<custom_token_N>` çıktısını SNAC ile sese çözer.
+Servis: [docs/serving_vllm_omni.md](docs/serving_vllm_omni.md) — vLLM'de TTS
+ucu olmadığından model **vllm-omni** ile (`vllm serve <model> --omni`) sunulur:
+OpenAI uyumlu `/v1/audio/speech`, WebSocket akışı ve `ref_audio` klonlama.
+Checkpoint stok Llama'dır; vllm-omni tarafında küçük bir out-of-tree eklenti
+(AR aşaması + SNAC çözücü aşaması) modeli hatta bağlar.
 
 ## Lisans ve yükümlülükler
 

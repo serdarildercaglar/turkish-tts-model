@@ -3,8 +3,8 @@
     python -m src.train --config configs/train.yaml [--resume]
 
 Checkpoint'ler atomik kaydedilir; elektrik kesintisinden sonra --resume ile
-kaldığı yerden devam eder. Kaydedilen model stok Llama'dır: vLLM doğrudan
-servis eder.
+kaldığı yerden devam eder. Kaydedilen model stok Llama'dır: vllm-omni'nin AR
+aşaması ek ağırlık olmadan yükler (docs/serving_vllm_omni.md).
 """
 from __future__ import annotations
 
