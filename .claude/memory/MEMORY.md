@@ -1,0 +1,5 @@
+- [Qwen3-TTS ince ayar kararı](ft-qwen3tts.md) — aktif dal: 0.6B-Base + 2000 saat; export yapıldı, review sesi bulutta parquet'ten dökülecek; sıfırdan eğitim dalı ve dosyaları 28 Ağu 2026'da silindi
+- [Kullanıcı ve ortam](user-and-environment.md) — tam cümleli Türkçe yanıt tercihi, 3090, whisper-vllm docker, veri yolları, arXiv/voxcpm köprüsü
+- [ema-tts taban çizgisi](ema-tts-baseline.md) — NAR flow-matching yerelde ölçüldü: RTF paritesi (NAR kazanç yok), prozodide üstünlük bizde
+- [Eval rakam tuzağı](eval-digit-scoring-trap.md) — sayılı cümlelerde WER yapay şişiyor; ASR rakam yazıyor, naif normalizasyon okunuşu tutturamıyor
+- [Veri kümesi denetimi](dataset-audit.md) — review seti değerli (sentetik bayrağı yanlış pozitif), %93 konuşmacı sızıntısı, hijyen sonrası 2.623,8 saat

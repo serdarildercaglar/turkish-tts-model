@@ -15,7 +15,7 @@ from pathlib import Path
 import torch
 import yaml
 from transformers import (
-    LlamaConfig, LlamaForCausalLM, PreTrainedTokenizerFast,
+    AutoConfig, AutoModelForCausalLM, PreTrainedModel, PreTrainedTokenizerFast,
     Trainer, TrainingArguments,
 )
 from torch.utils.data import DataLoader
@@ -49,12 +49,14 @@ class TokenBudgetTrainer(Trainer):
         )
 
 
-def build_model(cfg_path: Path, tokenizer: PreTrainedTokenizerFast) -> LlamaForCausalLM:
-    cfg = LlamaConfig(**json.loads(cfg_path.read_text()))
+def build_model(cfg_path: Path, tokenizer: PreTrainedTokenizerFast) -> PreTrainedModel:
+    # model_type json'da (llama, qwen3, ...); config sinifi oradan secilir.
+    d = json.loads(cfg_path.read_text())
+    cfg = AutoConfig.for_model(d.pop("model_type"), **d)
     cfg.bos_token_id = tokenizer.bos_token_id
     cfg.eos_token_id = tokenizer.eos_token_id
     cfg.pad_token_id = tokenizer.pad_token_id
-    model = LlamaForCausalLM(cfg)
+    model = AutoModelForCausalLM.from_config(cfg)
     n = sum(p.numel() for p in model.parameters())
     print(f"model: {n/1e6:.1f}M parametre")
     return model

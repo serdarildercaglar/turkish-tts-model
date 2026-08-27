@@ -13,6 +13,10 @@ tüm bölümlerin kodlarını tek dizin ağacından okur.
         --manifest artifacts/manifest/train_all.jsonl \
         --out artifacts/codes
 
+    # dogrudan Hub'dan akisla (yerel kopya tutmadan; tepe disk ~1 shard)
+    python scripts/ingest_audio.py --from-hub --splits review \
+        --manifest artifacts/manifest/train_all.jsonl --out artifacts/codes
+
     # yerel FLAC kliplerden
     python scripts/ingest_audio.py \
         --manifest artifacts/manifest/train_all.jsonl --out artifacts/codes/train
@@ -41,6 +45,7 @@ from src.codec import SAMPLES_PER_FRAME, SNAC_SR, encode_batch, load_snac
 from src.dataset_source import find_shards, iter_audio
 
 LOCAL_SHARD_SIZE = 4096
+REPO = "serdarcaglar/turkish-tts-audiobooks"
 
 
 def decode_audio(cell):
@@ -105,6 +110,60 @@ def write_shard(path: Path, ids: list[str], codes: list[list[int]]) -> None:
     tmp = path.with_suffix(".tmp.npz")
     np.savez_compressed(tmp, ids=np.array(ids), lens=lens, tokens=tokens)
     tmp.rename(path)
+
+
+def hub_shards(repo: str, split: str) -> list[str]:
+    """Hub'daki `data/<split>-*.parquet` yollarini sirali dondurur."""
+    from huggingface_hub import HfApi
+
+    files = HfApi().list_repo_files(repo, repo_type="dataset")
+    return sorted(f for f in files
+                  if f.startswith(f"data/{split}-") and f.endswith(".parquet"))
+
+
+def run_hub(args, model, keep, keep_split) -> None:
+    """Shard'i indir -> kodla -> sil. Yerelde 84 GB tutmaya gerek kalmaz."""
+    from huggingface_hub import hf_hub_download
+
+    cache = args.cache
+    cache.mkdir(parents=True, exist_ok=True)
+    for split in args.splits:
+        remotes = hub_shards(args.repo, split)
+        if not remotes:
+            print(f"! {split}: Hub'da shard yok, atlandi", file=sys.stderr)
+            continue
+        out_dir = args.out / split
+        out_dir.mkdir(parents=True, exist_ok=True)
+        ids_wanted = keep_split.get(split, keep)
+        t0 = time.time()
+        n_clip = n_tok = done = skipped = 0
+        for si, remote in enumerate(remotes):
+            out_path = out_dir / f"shard-{si:05d}.npz"
+            if out_path.exists():
+                skipped += 1
+                continue
+            local = hf_hub_download(args.repo, remote, repo_type="dataset",
+                                    local_dir=str(cache))
+            try:
+                items = []
+                for cid, cell in iter_audio(local, ids_wanted):
+                    dec = decode_audio(cell)
+                    if dec is not None:
+                        items.append((cid, to_24k(*dec)))
+                ids, codes = encode_group(model, items, args.device,
+                                          args.batch_sec)
+                write_shard(out_path, ids, codes)
+                done += 1
+                n_clip += len(ids)
+                n_tok += sum(len(c) for c in codes)
+                print(f"[{split}] shard {si + 1}/{len(remotes)}  "
+                      f"klip={len(ids)}  toplam={n_clip:,}  "
+                      f"gecen={(time.time() - t0) / 60:.1f}dk", flush=True)
+            finally:
+                if not args.keep_parquet and os.path.isfile(local):
+                    os.remove(local)
+        print(f"[{split}] bitti: {done} yazildi, {skipped} atlandi, "
+              f"{n_clip:,} klip, {n_tok:,} token -> {out_dir}")
 
 
 def run_parquet(args, model, keep, keep_split) -> None:
@@ -183,6 +242,12 @@ def main() -> None:
     ap.add_argument("--batch-sec", type=float, default=240.0)
     ap.add_argument("--delete-parquet", action="store_true",
                     help="islenen parquet'i sil (tepe disk kullanimini dusurur)")
+    ap.add_argument("--from-hub", action="store_true",
+                    help="yerel kopya yerine Hub'dan shard shard akitarak oku")
+    ap.add_argument("--repo", default=REPO)
+    ap.add_argument("--cache", type=Path, default=Path("artifacts/parquet_cache"))
+    ap.add_argument("--keep-parquet", action="store_true",
+                    help="--from-hub ile indirilen shard'i silme")
     args = ap.parse_args()
 
     keep: set[str] = set()
@@ -199,7 +264,9 @@ def main() -> None:
     print(f"hijyenden gecen klip: {len(keep):,}", file=sys.stderr)
 
     model = load_snac(args.device)
-    if args.data:
+    if args.from_hub:
+        run_hub(args, model, keep, keep_split)
+    elif args.data:
         run_parquet(args, model, keep, keep_split)
     else:
         run_local(args, model, rows)
