@@ -56,9 +56,10 @@ def main() -> None:
 
     rng = random.Random(args.seed)
 
-    def src_of(cid: str) -> str:
-        # kimlik bicimi: source-<hash>-<bas_ms>-<bit_ms>
-        return cid.rsplit("-", 2)[0]
+    def src_of(r: dict) -> str:
+        # harici kumeler kayit anahtarini `src` alaninda tasir; bizim
+        # manifest'te kimlik bicimi source-<hash>-<bas_ms>-<bit_ms>
+        return r.get("src") or r["id"].rsplit("-", 2)[0]
 
     # Yedek referans havuzu: konusmaci -> sure sinirina uyan klipler.
     pool: dict[str, list[dict]] = {}
@@ -79,14 +80,14 @@ def main() -> None:
         ref = rows.get(r.get("ref_id") or "")
         if ref is not None and float(ref.get("duration") or 0) <= args.max_ref_dur:
             return ref
-        if str(r.get("speaker_id") or "").startswith("review-"):
+        if str(r.get("speaker_id") or "").startswith(("review-", "emb-")):
             return None
         cands = pool.get(r.get("speaker_id"), [])
         for _ in range(8):
             if not cands:
                 break
             c = rng.choice(cands)
-            if c["id"] != r["id"] and src_of(c["id"]) != src_of(r["id"]):
+            if c["id"] != r["id"] and src_of(c) != src_of(r):
                 return c
         return None
 

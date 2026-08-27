@@ -78,6 +78,52 @@ B planıdır; A dalı klon/prozodide hedefi tutturamazsa ilk denenecek odur.
    akış. SNAC/özel eklenti bu dalda YOK; `to_telephony.py` 24 kHz → 8 kHz
    tarafı aynen geçerli.
 
+## Ek harici veri kümeleri (28 Ağu 2026 — birer shard'la yerinde denetlendi)
+
+Kullanıcı üç HF kümesinin eklenmesini istedi. Denetim: her kümeden tek shard
+indirilip şema + DNSMOS (raw-dalga, bizim onnx) örneklendi, sonra silindi.
+Tam döküm YALNIZ bulutta yapılır (`ingest_hf_dataset.py`).
+
+| Küme | Boyut | Denetim bulgusu | Lisans / risk |
+|---|---|---|---|
+| `Anilosan15/Turkish_TTS_Data` | 30.606 satır, tek konuşmacı ("sıla"), 48 kHz | Sesli-kitap tarzı, temiz; DNSMOS ort **3,34** (3,11–3,51) | **LİSANS YOK** — ticari kullanım riski kullanıcı kararı |
+| `afkfatih/turkish-tts-combined-raw` | 81.513 satır, 7 kaynak, 16/48 kHz karışık | DNSMOS 2,13–3,64 dalgalı; **konuşmacı sütunu YOK** → `pair_by_embedding.py` şart | CC-BY-SA-3.0; içindeki Khan Academy payı muhtemelen NC — ticari için o alt küme dışlanabilir olmalı |
+| `Codyfederer/tr-combined` | 221.531 satır, **2.158 etiketli konuşmacı**, duygu etiketi, 44,1 kHz | YouTube kırpımı (Vyvo builder); DNSMOS 2,38–3,29; `original_filename` çoğu satırda boş | CC-BY-4.0 deniyor ama YouTube kazıması — etiketin hukuki değeri şüpheli |
+
+Mükerrer metin notu (kullanıcı): aynı metnin farklı seslendirmeleri BİLEREK
+tutulur (prozodi çeşitliliği); hijyen yalnız (konuşmacı, metin, ~süre) üçlüsü
+aynı olan gerçek kayıt mükerrerlerini düşürür. Kümeler arası aynı kayıt
+gelirse (afkfatih ↔ tr-combined kaynak çakışması olası) aynı üçlü yakalar.
+
+Bulut sırası (harici kümeler):
+
+    # 1) dök + hijyen (+ istenirse --dnsmos-min 3.0 kalite süzgeci)
+    python scripts/ingest_hf_dataset.py --repo Anilosan15/Turkish_TTS_Data \
+        --tag anil --speaker-const sila --clips /veri/ext/anil \
+        --out artifacts/manifest/ext_anil.jsonl
+    python scripts/ingest_hf_dataset.py --repo afkfatih/turkish-tts-combined-raw \
+        --tag afk --clips /veri/ext/afk --out artifacts/manifest/ext_afk.jsonl
+    python scripts/ingest_hf_dataset.py --repo Codyfederer/tr-combined \
+        --tag cody --speaker-col speaker_id --src-col original_filename \
+        --clips /veri/ext/cody --out artifacts/manifest/ext_cody.jsonl
+    # 2) konuşmacısız kümeye gömme eşlemesi (pyannote/embedding, GPU)
+    python scripts/pair_by_embedding.py --manifest artifacts/manifest/ext_afk.jsonl \
+        --out artifacts/manifest/ext_afk_paired.jsonl --device cuda
+    # 3) birleşik dışa aktarım (saat sınırını ihtiyaca göre büyüt)
+    python scripts/export_qwen3tts_ft.py \
+        --manifest artifacts/manifest/train_only.jsonl \
+                   artifacts/manifest/review_paired.jsonl \
+                   artifacts/manifest/ext_anil.jsonl \
+                   artifacts/manifest/ext_afk_paired.jsonl \
+                   artifacts/manifest/ext_cody.jsonl \
+        --out artifacts/qwen3tts_ft/train.jsonl --max-hours 2600 --no-check-files
+    # 4) ana kümenin klipleri: materialize_clips.py (harici kliplerin yolu
+    #    zaten yerel/dökülmüş olduğundan yalnız ana küme id'leri dökülür)
+
+Not: harici manifest'ler `src` (kayıt anahtarı) taşır; exporter aynı kayıttan
+referans seçmez. DNSMOS süzgeci açılırsa eşiğimiz pratiği ~3,0'dır — tr-combined
+ve afkfatih'in düşük ucunu eler, Anilosan neredeyse tamamen geçer.
+
 ## Kaynaklar
 
 - https://github.com/QwenLM/Qwen3-TTS (Apache-2.0; "day-0 vLLM-Omni")

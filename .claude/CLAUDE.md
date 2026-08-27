@@ -4,16 +4,24 @@ Yerel oturumların biriktirdiği hafıza `.claude/memory/` altında; ayrıntı
 gerektiğinde ilgili dosyayı oku. Kullanıcı tam cümleli Türkçe yanıt tercih
 eder.
 
-## Güncel durum (28 Ağu 2026)
+## Güncel durum (28 Ağu 2026) — İŞLER BURADAN (BULUTTAN) DEVAM EDECEK
 
-**Tek aktif dal — Qwen3-TTS ince ayarı:** sıfırdan eğitim dalı ve o dala ait
-mimari dosyalar/kararlar bilinçli olarak silindi. Model:
-Qwen3-TTS-12Hz-0.6B-Base (Apache-2.0, resmî FT hattı, vllm-omni day-0 yerli).
-2.000 saatlik `{audio, text, ref_audio}` JSONL'i dışa aktarıldı
-(`artifacts/qwen3tts_ft/train.jsonl`, 638.929 satır, heldout dışarıda).
-Review kliplerinin FLAC'i yerelde YOK — bulutta `scripts/download_dataset.py`
-ile parquet'ler indirilir, `scripts/materialize_clips.py` klipleri döker ve
-yolları yeniden yazar. Plan ve riskler: `docs/ft_qwen3tts.md`.
+**Tek aktif dal — Qwen3-TTS ince ayarı:** sıfırdan eğitim dalı silindi.
+Model: Qwen3-TTS-12Hz-0.6B-Base (Apache-2.0, resmî FT hattı, vllm-omni
+day-0 yerli). Ana kümenin 2.000 saatlik `{audio, text, ref_audio}` JSONL'i
+yerelde üretildi (638.929 satır, heldout dışarıda) ama gitignore'da —
+bulutta aynı tohumla yeniden üretilir. Sıradaki adımlar (ayrıntı ve tam
+komutlar `docs/ft_qwen3tts.md` "Bulut sırası"):
+
+1. Ana küme parquet'leri → `scripts/materialize_clips.py` (review FLAC'leri
+   yalnız Hub'da).
+2. Üç harici küme → `scripts/ingest_hf_dataset.py` (hijyen dahil;
+   Anilosan LİSANSSIZ, afkfatih'te Khan-NC payı, tr-combined YouTube
+   kırpımı — ticari karar kullanıcının).
+3. afkfatih konuşmacısız → `scripts/pair_by_embedding.py` (pyannote).
+4. Birleşik `scripts/export_qwen3tts_ft.py` → Qwen resmî `prepare_data.py`
+   → `sft_12hz.py` (ayrı env; Qwen paketi transformers>=5 ile uyumsuz).
+5. Eval üçlüsü: WER / DNSMOS / klon benzerliği, `heldout.jsonl`.
 
 ## Dizin
 
