@@ -29,10 +29,8 @@ import torch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.codec import SNAC_SR, decode_to_wav, load_snac
-from src.vocab import (
-    AUDIO_BASE, AUDIO_END, AUDIO_START, BOS, CLONE_TTS, EOS, PLAIN_TTS,
-    TEXT_END, TEXT_START, is_audio_id, lm_id_to_audio,
-)
+from src.prompt import build_prompt
+from src.vocab import AUDIO_END, EOS, is_audio_id, lm_id_to_audio
 
 
 def norm_text(s: str) -> str:
@@ -52,6 +50,18 @@ def cer(hyp: str, ref: str) -> float:
             cur.append(min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (ch != cr)))
         prev = cur
     return prev[-1] / len(r)
+
+
+def band_limit(wav: np.ndarray, sr: int, band_sr: int) -> np.ndarray:
+    """Telefon bandına indirip geri çıkar (G.711 hattının yaptığı).
+
+    IVR çıkışı 8 kHz'e düşeceği için değerlendirme de o bantta yapılmalı;
+    yoksa hattan asla teslim edilmeyecek bir kaliteyi ölçeriz.
+    """
+    import torchaudio.functional as AF
+
+    x = torch.from_numpy(np.ascontiguousarray(wav)).float()
+    return AF.resample(AF.resample(x, sr, band_sr), band_sr, sr).numpy()
 
 
 def transcribe(url: str, model: str, wav: np.ndarray) -> str | None:
@@ -136,6 +146,9 @@ def main() -> None:
     ap.add_argument("--out-dir", type=Path, default=Path("eval"))
     ap.add_argument("--device", default="cuda")
     ap.add_argument("--limit", type=int)
+    ap.add_argument("--band-sr", type=int, default=8000,
+                    help="ASR oncesi indirilecek bant (0: kapali). IVR hatti "
+                         "G.711'de 8 kHz'tir")
     args = ap.parse_args()
 
     import soundfile as sf
@@ -175,13 +188,11 @@ def main() -> None:
             return tok(s, add_special_tokens=False)["input_ids"]
 
         if p["kind"] == "clone":
-            ref_codes = encode_ref(snac, p["ref_audio"], args.device)
-            prompt = [BOS, CLONE_TTS, TEXT_START,
-                      *tids(p["ref_text"] + " " + p["text"]), TEXT_END,
-                      AUDIO_START, *(x + AUDIO_BASE for x in ref_codes)]
+            prompt = build_prompt(
+                tids(p["ref_text"] + " " + p["text"]), clone=True,
+                ref_codes=encode_ref(snac, p["ref_audio"], args.device))
         else:
-            prompt = [BOS, PLAIN_TTS, TEXT_START, *tids(p["text"]), TEXT_END,
-                      AUDIO_START]
+            prompt = build_prompt(tids(p["text"]))
         ids = torch.tensor([prompt], device=args.device)
         with torch.inference_mode():
             out = model.generate(ids, do_sample=True, temperature=0.7, top_p=0.9,
@@ -198,6 +209,16 @@ def main() -> None:
             if c.get("whisper_url"):
                 hyp = transcribe(c["whisper_url"], c.get("whisper_model", ""), wav)
                 row["cer"] = cer(hyp, p["text"]) if hyp is not None else None
+                if args.band_sr:
+                    band = band_limit(wav, SNAC_SR, args.band_sr)
+                    hyp_b = transcribe(c["whisper_url"],
+                                       c.get("whisper_model", ""), band)
+                    row["cer_band"] = (cer(hyp_b, p["text"])
+                                       if hyp_b is not None else None)
+                # Rakam iceren cumleler ayri raporlanir: ASR onlari rakamla geri
+                # yazar ve naif normalizasyon dogru okunusu tutturamaz, olculen
+                # hata sentezden degil harness'ten gelir.
+                row["has_digits"] = bool(p.get("has_digits"))
             if spk and p["kind"] == "clone":
                 import soundfile as sf2
                 ref_wav, ref_sr = sf2.read(p["ref_audio"], dtype="float32")
@@ -207,16 +228,24 @@ def main() -> None:
         results.append(row)
         print(row, flush=True)
 
-    def agg(key, kind=None):
+    def agg(key, kind=None, digits=None):
         vals = [r[key] for r in results
-                if r.get(key) is not None and (kind is None or r["kind"] == kind)]
+                if r.get(key) is not None
+                and (kind is None or r["kind"] == kind)
+                and (digits is None or bool(r.get("has_digits")) is digits)]
         return float(np.mean(vals)) if vals else None
 
     summary = {
         "checkpoint": args.checkpoint,
         "n": len(results),
         "cer_plain": agg("cer", "plain"), "cer_clone": agg("cer", "clone"),
-        "cer": agg("cer"), "spk_cos": agg("spk_cos"),
+        "cer": agg("cer"),
+        # 8 kHz telefon bandi: IVR'in gercekten teslim edecegi kalite
+        "cer_band": agg("cer_band"),
+        # rakamsiz alt kume harness tuzagindan arinmis olcumdur
+        "cer_no_digits": agg("cer", digits=False),
+        "cer_digits": agg("cer", digits=True),
+        "spk_cos": agg("spk_cos"),
         "dnsmos_ovrl": agg("dnsmos_ovrl"),
         "empty_generations": sum(1 for r in results if r["n_tokens"] < 7),
     }

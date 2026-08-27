@@ -24,6 +24,8 @@ def main() -> None:
     ap.add_argument("--repo", required=True)
     ap.add_argument("--eval-json", type=Path)
     ap.add_argument("--out", type=Path, default=Path("export"))
+    ap.add_argument("--packed", type=Path,
+                    help="prosody.json'un arananacagi paketlenmis veri dizini")
     ap.add_argument("--push", action="store_true")
     args = ap.parse_args()
 
@@ -34,6 +36,14 @@ def main() -> None:
     tok = PreTrainedTokenizerFast.from_pretrained(args.tokenizer)
     model.save_pretrained(args.out, safe_serialization=True)
     tok.save_pretrained(args.out)
+    # prosody.json checkpoint ile birlikte tasinmali: kova sinirlari olmadan
+    # <|rate_k|> tokenlari cikarimda baska bir hizi ifade eder
+    for src_dir in (args.checkpoint, args.checkpoint.parent, args.packed):
+        if src_dir and (Path(src_dir) / "prosody.json").is_file():
+            shutil.copy(Path(src_dir) / "prosody.json", args.out / "prosody.json")
+            break
+    else:
+        print("! prosody.json bulunamadi; cikarim yedek sinirlari kullanir")
 
     card = (ROOT / "MODEL_CARD.md").read_text(encoding="utf-8")
     if args.eval_json and args.eval_json.is_file():

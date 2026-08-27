@@ -18,10 +18,9 @@ import torch
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from src.codec import SNAC_SR, decode_to_wav, encode_batch, load_snac, SAMPLES_PER_FRAME
-from src.vocab import (
-    AUDIO_END, AUDIO_START, BOS, CLONE_TTS, EOS, PLAIN_TTS,
-    TEXT_END, TEXT_START, is_audio_id, lm_id_to_audio,
-)
+from src.prompt import build_prompt
+from src.prosody import Prosody
+from src.vocab import AUDIO_END, EOS, is_audio_id, lm_id_to_audio
 
 MAX_REF_FRAMES = 117
 
@@ -57,6 +56,11 @@ def main() -> None:
     ap.add_argument("--top-p", type=float, default=0.9)
     ap.add_argument("--repetition-penalty", type=float, default=1.1)
     ap.add_argument("--max-new-tokens", type=int, default=1750)
+    ap.add_argument("--rate", type=int, choices=range(5),
+                    help="konusma hizi kovasi 0-4 (0 yavas, 4 hizli); "
+                         "verilmezse ogrenilmis ortalama")
+    ap.add_argument("--loud", type=int, choices=range(3),
+                    help="ses seviyesi kovasi 0-2; verilmezse ortalama")
     args = ap.parse_args()
     if bool(args.ref_audio) != bool(args.ref_text):
         ap.error("--ref-audio ve --ref-text birlikte verilmeli")
@@ -72,15 +76,15 @@ def main() -> None:
     def tids(s: str) -> list[int]:
         return tok(s, add_special_tokens=False)["input_ids"]
 
-    from src.vocab import AUDIO_BASE
+    # kova sinirlari checkpoint yaninda tasinir; yoksa yedek sinirlar kullanilir
+    Prosody.load(args.model)
+
     if args.ref_audio:
-        ref_codes = encode_ref(snac, args.ref_audio, args.device)
-        prompt = [BOS, CLONE_TTS, TEXT_START,
-                  *tids(args.ref_text + " " + args.text), TEXT_END,
-                  AUDIO_START, *(c + AUDIO_BASE for c in ref_codes)]
+        prompt = build_prompt(tids(args.ref_text + " " + args.text), clone=True,
+                              ref_codes=encode_ref(snac, args.ref_audio, args.device),
+                              rate=args.rate, loud=args.loud)
     else:
-        prompt = [BOS, PLAIN_TTS, TEXT_START, *tids(args.text), TEXT_END,
-                  AUDIO_START]
+        prompt = build_prompt(tids(args.text), rate=args.rate, loud=args.loud)
 
     ids = torch.tensor([prompt], device=args.device)
     with torch.inference_mode():

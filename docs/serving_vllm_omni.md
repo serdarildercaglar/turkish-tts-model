@@ -135,6 +135,11 @@ curl -s http://localhost:8091/v1/audio/speech \
 
 ### Ölçülen hız (24 Ağu 2026, boş RTX 3090, vLLM 0.26, CUDA graph FULL_AND_PIECEWISE, rastgele ağırlıklı 95M)
 
+> **Not (27 Ağu 2026):** aşağıdaki tablo, sözlük düzeltmesinden önceki 95M
+> yapılandırmayla alınmıştır. Model 62,8M'e indi ve sözlük 36.928 → 16.448
+> oldu; LM başı 2,2 kat küçüldüğü için adım süresinin düşmesi beklenir.
+> **Tabloyu yeni checkpoint'le yeniden ölçün.**
+
 `scripts/bench_vllm_decode.py` ile; 200 tokenlik istem + 1.000 token üretim.
 Sayı, **adım süresi** ile belirlenir (model 190 MB — bellek değil, kernel
 başlatma tabanında koşar):

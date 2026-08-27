@@ -3,10 +3,10 @@
 
 tokenizer_dir: artifacts/tokenizer
 packed_dir: artifacts/packed
-model_config: configs/model_95m.json
+model_config: configs/model_63m.json
 output_dir: ckpt
 
-micro_batch: 16
+tokens_per_batch: 20480
 grad_accum: 4
 epochs: 8
 lr: 3.0e-4

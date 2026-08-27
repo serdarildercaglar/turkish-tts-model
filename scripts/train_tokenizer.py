@@ -1,7 +1,7 @@
-"""Korpus transkriptlerinden 8k'lık Türkçe ByteLevel BPE eğitir.
+"""Korpus transkriptlerinden 4k'lık Türkçe ByteLevel BPE eğitir.
 
 Nihai tokenizer üç bölgeyi tek sözlükte birleştirir (bkz. src/vocab.py):
-metin BPE [0,8192), ses tokenları [8192,36864), özel tokenlar [36864,...).
+metin BPE [0,4096), ses tokenları [4096,16384), özel+kontrol [16384,...).
 Çıktı: --out dizinine HF `PreTrainedTokenizerFast` (tokenizer.json + config).
 
 Depo kökünden:  python scripts/train_tokenizer.py \
@@ -17,14 +17,17 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.codec import AUDIO_VOCAB
-from src.vocab import SPECIALS, TEXT_VOCAB, VOCAB_SIZE, audio_token_name
+from src.vocab import ALL_ADDED, CONTROLS, SPECIALS, TEXT_VOCAB, VOCAB_SIZE, audio_token_name
 
 
 def iter_texts(manifest: Path):
+    """Hijyenden geçmiş manifestin metinleri — model tam olarak bunları görecek."""
     with manifest.open(encoding="utf-8") as fh:
         for line in fh:
             if line.strip():
-                yield json.loads(line)["text"]
+                t = json.loads(line).get("text")
+                if t:
+                    yield t
 
 
 def main() -> None:
@@ -51,7 +54,7 @@ def main() -> None:
     # Ses tokenlarini 8192'den, ozel tokenlari 36864'ten baslatacak sirada ekle.
     added = tok.add_tokens([audio_token_name(i) for i in range(AUDIO_VOCAB)])
     assert added == AUDIO_VOCAB
-    tok.add_special_tokens(SPECIALS)
+    tok.add_special_tokens(ALL_ADDED)
     for name, want in (("<|bos|>", None), (audio_token_name(0), TEXT_VOCAB)):
         if want is not None:
             assert tok.token_to_id(name) == want, (name, tok.token_to_id(name))
@@ -70,6 +73,7 @@ def main() -> None:
         "text_vocab": TEXT_VOCAB,
         "audio_vocab": AUDIO_VOCAB,
         "specials": {s: fast.convert_tokens_to_ids(s) for s in SPECIALS},
+        "controls": {s: fast.convert_tokens_to_ids(s) for s in CONTROLS},
         "audio_0": fast.convert_tokens_to_ids(audio_token_name(0)),
         "audio_last": fast.convert_tokens_to_ids(audio_token_name(AUDIO_VOCAB - 1)),
         "len": len(fast),

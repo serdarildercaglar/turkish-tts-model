@@ -1,85 +1,164 @@
 # turkish-tts-model
 
-Türkçe metinden konuşma sentezi için **sıfırdan eğitilen**, ~95M parametreli,
-**vllm-omni ile `/v1/audio/speech` olarak servis edilen**, ses klonlamalı,
-gerçek zamanlı IVR hedefli bir konuşma dil modeli. Eğitim verisi:
+Türkçe metinden konuşma sentezi için **sıfırdan eğitilen**, **63M parametreli**,
+ses klonlamalı ve prozodi kontrollü, gerçek zamanlı IVR hedefli bir konuşma dil
+modeli. Tek RTX 3090'da eğitilebilir. Eğitim verisi:
 [`serdarcaglar/turkish-tts-audiobooks`](https://huggingface.co/datasets/serdarcaglar/turkish-tts-audiobooks)
-(1.292 saat temiz Türkçe okuma konuşması; hattı da açık:
-[turkish-tts-audiobooks](https://github.com/serdarildercaglar/turkish-tts-audiobooks)).
+(hattı da açık: [turkish-tts-audiobooks](https://github.com/serdarildercaglar/turkish-tts-audiobooks)).
 
 ## Mimari
 
-Stok `LlamaForCausalLM` — hiçbir özel modelleme kodu yok; olağan bir dil
-modeli, sözlüğü ses tokenlarıyla genişletilmiş:
+Stok `LlamaForCausalLM` — hiçbir özel modelleme kodu yok; olağan bir dil modeli,
+sözlüğü ses tokenlarıyla genişletilmiş.
 
-- **Codec:** [SNAC 24 kHz](https://github.com/hubertsiuzdak/snac) (MIT).
-  Üç RVQ düzeyi, kaba çerçeve başına 7 token olarak düzleştirilir
-  (Orpheus şeması), ~83 token/saniye. Korpus 16 kHz olduğundan giriş 24 kHz'e
-  yeniden örneklenir; çıkış 24 kHz'tir.
-- **Sözlük (36.928):** 8.192 Türkçe BPE (korpustan eğitilir) + 28.672 ses
-  tokenı (`<custom_token_N>` — vLLM motorunun sıradan token olarak
-  üretebilmesi için gerçek tokenlar) + özel tokenlar.
-- **Model:** hidden 640 / 14 katman / 10 başlık (GQA, 2 KV başı) / FFN 2176, RoPE, bağlı
-  embedding → ~95M parametre (`configs/model_95m.json`; 74M ve 145M
-  varyantları da var).
+- **Codec:** [SNAC 24 kHz](https://github.com/hubertsiuzdak/snac) (MIT). Üç RVQ
+  düzeyi, kaba çerçeve başına 7 token olarak düzleştirilir (Orpheus şeması),
+  ~82 token/saniye. Korpus 16 kHz olduğundan giriş 24 kHz'e yeniden örneklenir.
+- **Sözlük (16.448):** 4.096 Türkçe BPE + **12.288 ses tokenı** + özel ve
+  prozodi kontrol tokenları.
+
+  Ses sözlüğü **düzey** başına ofsetlenir, yuva başına değil. Yedi yuvanın her
+  birine kendi 4.096'lık aralığını vermek (28.672 giriş) L1'i iki, L2'yi dört
+  kez kopyalar — oysa bunlar aynı kod kitabından gelir. Çerçeve içindeki yuva
+  bilgisi zaten konumdan (RoPE) gelir. Düzey ofseti 16.384 gömme satırı
+  kazandırır: gömme tablosu modelin %25'inden **%13'üne** iner, kazanılan
+  parametre katmanlara gider.
+
+- **Model:** hidden 512 / 20 katman / 8 başlık (GQA, 2 KV başı) / FFN 1344,
+  RoPE, bağlı embedding → **62,8M parametre** (`configs/model_63m.json`;
+  51M ve 58M varyantları da var).
+
+- **Batching token bütçesiyle yapılır**, sabit örnek sayısıyla değil. Örnek
+  uzunlukları 300–2600 token arasında değişiyor; sabit batch boyutu ya kısa
+  kovalarda GPU'yu boş bırakır ya uzun kovada belleği taşırır. `tokens_per_batch`
+  dolgulu maliyeti (en uzun örnek × batch boyutu) sabitler.
+  3090'da ölçülen: **20.480 token/batch → 19,1 GB, ~1,05 s/adım**.
+
 - **İstem biçimi:**
-  - Düz TTS: `<|bos|><|plain_tts|><|text_start|>metin<|text_end|><|audio_start|>` → model ses tokenları + `<|audio_end|><|eos|>` üretir.
-  - Klonlama: `<|bos|><|clone_tts|><|text_start|>ref_metin hedef_metin<|text_end|><|audio_start|>REF_SES` → model referans sesin devamı olarak hedef sesi üretir (Llasa tarzı devam).
+  - Düz: `<|bos|><|plain_tts|><|rate_k|><|loud_k|>[parça]<|text_start|>metin<|text_end|><|audio_start|>`
+  - Klon: `<|bos|><|clone_tts|><|rate_k|><|loud_k|>[parça]<|text_start|>ref_metin hedef_metin<|text_end|><|audio_start|>REF_SES`
 
-## Eğitim (tek RTX 3090)
+  Tek tanım `src/prompt.py`'dedir; eğitim, çıkarım ve değerlendirme aynı yerden
+  okur ki biçim sessizce ayrışmasın.
+
+- **Prozodi kontrolü:** klip başına manifestten bedava gelen iki öznitelik
+  kovalanır — konuşma hızı (harf/sn, 5 kova) ve ses seviyesi (LUFS, 3 kova).
+  Kova sınırları korpustan hesaplanır ve `prosody.json` olarak checkpoint'le
+  taşınır. Eğitimde kontrol tokenı `--control-dropout` olasılığıyla
+  `<|rate_any|>`/`<|loud_any|>`'e düşer, böylece çıkarımda kontrol verilmezse
+  model öğrenilmiş ortalamaya oturur. Kalite (DNSMOS) kovası bilerek yok:
+  korpusta aralık 2,94–3,58 ile çok dar, öğrenilecek sinyal taşımıyor.
+
+## Veri hattı
+
+Kaynak veriye asla yazılmaz; her adım türetilmiş çıktı üretir ve ne düştüğünü
+gerekçesiyle raporlar.
 
 ```bash
 pip install -r requirements.txt
-cp configs/train.example.yaml configs/train.yaml   # yolları doldur
+cp configs/train.example.yaml configs/train.yaml
 
-# 1) Metin tokenizer'ı (8k BPE)
-python scripts/train_tokenizer.py --manifest .../hf_train.jsonl --out artifacts/tokenizer
+# 0) (istege bagli) veri kumesini denetle — salt okunur
+python scripts/audit_dataset.py --manifest .../hf_train.jsonl \
+    --val .../hf_validation.jsonl --out artifacts/audit
 
-# 2) Ses tokenizasyonu: FLAC klipler -> SNAC kodları (~0,8 GB, 3-5 sa GPU, sürdürülebilir)
-python scripts/tokenize_audio.py --manifest .../hf_train.jsonl --out artifacts/codes/train
-python scripts/tokenize_audio.py --manifest .../hf_validation.jsonl --out artifacts/codes/validation
+# 1) veri kumesini indir (train + review; ses parquet icinde gomulu)
+pip install hf_transfer          # kapili depoda tek akis ~140 KB/s'te takiliyor
+python scripts/download_dataset.py --out /veri/turkish-tts --splits train review
 
-# 3) Paketlenmiş eğitim kümesi (~550M token/epoch; düz + ref_id klon çiftleri x2)
-python scripts/build_dataset.py --manifest .../hf_train.jsonl \
-    --codes artifacts/codes/train --tokenizer artifacts/tokenizer --out artifacts/packed
+# 2) hijyen + train/review birlestirme -> turetilmis manifest
+python scripts/prepare_manifest.py --data /veri/turkish-tts --splits train review \
+    --out artifacts/manifest/train_all.jsonl \
+    --report artifacts/manifest/train_all_report.json
 
-# 4) Eğitim (bf16, uzunluk-kovali batching, atomik checkpoint; --resume ile devam)
-python -m src.train --config configs/train.yaml
+# 3) metin tokenizer'i (4k BPE, hijyenden gecmis metin uzerinde)
+python scripts/train_tokenizer.py --manifest artifacts/manifest/train_all.jsonl \
+    --out artifacts/tokenizer
 
-# 5) Checkpoint değerlendirme: CER (Whisper) + konuşmacı kosinüsü + DNSMOS
-python scripts/make_eval_set.py --manifest .../hf_validation.jsonl --out artifacts/eval_set.jsonl
-python -m src.evaluate --config configs/train.yaml --checkpoint ckpt/checkpoint-2000
+# 4) ses -> SNAC kodlari (parquet'ten akisla; --delete-parquet ile disk tasarrufu)
+python scripts/ingest_audio.py --data /veri/turkish-tts --splits train review \
+    --manifest artifacts/manifest/train_all.jsonl --out artifacts/codes
+
+# 5) paketlenmis egitim kumesi
+python scripts/build_dataset.py --manifest artifacts/manifest/train_all.jsonl \
+    --codes artifacts/codes --tokenizer artifacts/tokenizer --out artifacts/packed
+
+# 6) egitim
+python -m src.train --config configs/train.yaml        # --resume ile devam
 ```
 
-Veri kümesi kapılıdır (otomatik onaylı form); klipler ve manifestler yerelde
-hazırsa yolları doğrudan gösterin, değilse Hub'dan indirip `audio` alanlarını
-diske açın.
+### Hijyen politikası
+
+`src/data_hygiene.py` tek karar noktasıdır; hiçbir düzeltme sessizce uygulanmaz.
+
+**Kayıpsız metin düzeltmeleri.** Whisper Türkçe'de çift tırnağı `''` (iki ASCII
+kesme) yazıyor ve bu, ek sınırı işaretleyen kesme ile çakışıyor (`Baba'ya`).
+`''` → `"`, `…` → `...`, NFC, boşluk sadeleştirme. Ek kesmesi korunur.
+
+**Elenenler.** ASR döngüsü, harf/sn aykırılığı, aynı kaydın farklı `source_id`
+altında mükerrer alımı, `asr_cift_gecis_uyusmazligi` ve
+`farkli_konusmaci_suphesi` gerekçeleri, kalite eşikleri.
+
+Aynı metnin **farklı konuşmacıyla** tekrarı elenmez — o prozodi çeşitliliğidir.
+Mükerrer kayıt ayrımı süre eşitliğiyle yapılır (grup içi yayılım p50 0,000 s).
+
+`sentetik_ses_suphesi` bilerek eleme listesinde değil: review bölümünde tek bir
+okuyucunun ses değiştirip tiyatral okuması bu bayrağı yanlış tetikliyor, veri
+prozodi açısından değerli.
+
+**Cümle parçaları.** Korpusun ~dörtte biri cümle ortasından başlıyor ya da
+bitiyor. Atmak %25 veri kaybı demek; onun yerine `<|frag_start|>` /
+`<|frag_end|>` ile işaretlenir. Çıkarımda tokenı vermeyerek tam cümle isteriz.
+
+**Rakamlar varsayılan olarak ham bırakılır.** Sözelleştirme ayrı bir karardır,
+`--verbalize-digits` ile açılır (`src/text_frontend.py`).
+
+### Pilot alt kümesi
+
+```bash
+python scripts/make_subset.py --manifest artifacts/manifest/train_all.jsonl \
+    --hours 100 --out artifacts/manifest/pilot_100h.jsonl
+```
+
+Sıkı kalite kapısı (DNSMOS/konuşma oranı üst dilimleri, sıfır kırpma, sıfır ASR
+CER, parça yok) **ve** 5×3 prozodi kovasının eşit doldurulması. Kova içinde
+konuşmacılar sırayla gezilir, tek okuyucu kovayı kapatmasın.
 
 ## Çıkarım
 
 ```bash
-# Düz TTS
 python infer.py --model ckpt/final --tokenizer artifacts/tokenizer \
     --text "Merhaba, bugün hava çok güzel." --out merhaba.wav
 
-# Ses klonlama (3-10 sn referans + transkripti)
-python infer.py --model ckpt/final --tokenizer artifacts/tokenizer \
-    --text "Bu cümleyi referans sesle söyle." \
-    --ref-audio ref.wav --ref-text "Referans kaydın transkripti." --out klon.wav
+# prozodi kontrolu: hiz 0 (yavas) - 4 (hizli), seviye 0-2
+python infer.py ... --rate 1 --loud 1
+
+# ses klonlama (3-10 sn referans + transkripti)
+python infer.py ... --ref-audio ref.wav --ref-text "Referans kaydın transkripti."
 ```
 
-Servis: [docs/serving_vllm_omni.md](docs/serving_vllm_omni.md) — vLLM'de TTS
-ucu olmadığından model **vllm-omni** ile (`vllm serve <model> --omni`) sunulur:
-OpenAI uyumlu `/v1/audio/speech`, WebSocket akışı ve `ref_audio` klonlama.
-Checkpoint stok Llama'dır; vllm-omni tarafında küçük bir out-of-tree eklenti
-(AR aşaması + SNAC çözücü aşaması) modeli hatta bağlar.
+Servis: [docs/serving_vllm_omni.md](docs/serving_vllm_omni.md). Checkpoint stok
+Llama'dır; vllm-omni tarafında küçük bir out-of-tree eklenti (AR aşaması + SNAC
+çözücü aşaması) modeli hatta bağlar.
+
+## Değerlendirme notları
+
+- **Telefon bandı.** IVR çıkışı G.711'de 8 kHz'e düşer; değerlendirme sesi
+  ASR'den önce 8 kHz'e indirmelidir, yoksa hattan teslim edilmeyecek bir
+  kaliteyi ölçeriz.
+- **Rakam tuzağı.** Referans metin sayı içeriyorsa ASR çıktıyı rakamla yazar ve
+  naif `\d+ → kelime` normalizasyonu doğru okunuşu tutturamaz; ölçülen hata
+  sentezden değil harness'ten gelir. Sayılı cümleleri ayrı raporlayın.
+- **Bölünme.** Kaynak `validation`'ın %93,2'si eğitimde görülmüş konuşmacıya
+  ait; genelleme iddiası için konuşmacı-ayrık ayrı bir küme gerekir.
+- Örnekleyici stokastiktir; tek koşu tek çekiliştir. 3 tohum ortalaması ± ile
+  raporlayın.
 
 ## Lisans ve yükümlülükler
 
-Kod ve ağırlıklar **Apache-2.0**. Eğitim verisinin erişim şartları gereği bu
-modelin ağırlıkları ticari kullanıma izin veren bir lisansla açık yayımlanır
-ve veri kümesine atıf verilir; bu depo her iki yükümlülüğü de yerine getirir.
-SNAC codec'i MIT lisanslıdır (Hubert Siuzdak).
+Kod ve ağırlıklar **Apache-2.0**. SNAC codec'i MIT (Hubert Siuzdak).
+`src/text_frontend.py`, `canberkkkkkk/ema-tts` (Apache-2.0) içindeki `text.py`'den
+uyarlanmıştır.
 
 ## Atıf
 

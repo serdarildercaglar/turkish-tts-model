@@ -1,0 +1,31 @@
+# Pilot: 100 saatlik temiz + prozodi-tabakalı alt küme, tek RTX 3090.
+# Amaç kalite ölçmek DEĞİL — hattın doğruluğunu görmek: kayıp düşüyor mu,
+# ses anlaşılır mı, klonlama tutuyor mu, prozodi tokenları işe yarıyor mu.
+# 63M model 100 saatte hızla ezberler; kalite sayısı temsili olmaz.
+
+tokenizer_dir: artifacts/tokenizer
+packed_dir: artifacts/packed_pilot
+model_config: configs/model_63m.json
+output_dir: ckpt_pilot
+
+# 3090'da olculen: 20.480 token/batch -> ~20 GB ayrilmis.
+# 24.576 calisiyor ama 23,7 GB ile sinirdaydi; uzun bir kova tasirabilir.
+# Sabit batch boyutu yerine token bütçesi: örnekler 300-2600 token arasında
+# değiştiği için sabit sayı ya belleği taşırır ya GPU'yu boş bırakır.
+tokens_per_batch: 20480
+grad_accum: 2
+epochs: 6
+lr: 4.0e-4
+warmup_steps: 300
+weight_decay: 0.1
+save_steps: 1000
+save_total_limit: 3
+logging_steps: 25
+num_workers: 4
+seed: 42
+report_to: none
+
+eval_set: artifacts/eval_set.jsonl
+whisper_url: http://localhost:8000
+whisper_model: openai/whisper-large-v3-turbo
+dnsmos_onnx: ""                            # sig_bak_ovr.onnx yolu (istege bagli)

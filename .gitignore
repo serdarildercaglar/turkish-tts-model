@@ -11,3 +11,4 @@ wandb/
 *.bin
 *.wav
 configs/train.yaml
+ckpt_pilot/

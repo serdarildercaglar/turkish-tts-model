@@ -18,20 +18,34 @@ from transformers import (
     LlamaConfig, LlamaForCausalLM, PreTrainedTokenizerFast,
     Trainer, TrainingArguments,
 )
-from transformers.trainer_pt_utils import LengthGroupedSampler
+from torch.utils.data import DataLoader
 
-from src.data import PackedTTSDataset, TTSCollator
+from src.data import PackedTTSDataset, TokenBudgetSampler, TTSCollator
+from src.prosody import Prosody
 
 
-class LengthBucketTrainer(Trainer):
-    """Uzunluk kovalı örnekleyici: dolgu israfını düşürür."""
+class TokenBudgetTrainer(Trainer):
+    """Token bütçeli batching: batch başına dolgulu token sayısı sabit.
 
-    def _get_train_sampler(self, *args, **kwargs):
+    Örnek uzunlukları 300–2600 arasında değiştiği için sabit batch boyutu ya
+    kısa kovalarda GPU'yu boş bırakır ya uzun kovada belleği taşırır. Bütçe
+    her ikisini de sabitler.
+    """
+
+    def __init__(self, *a, tokens_per_batch: int, **kw):
+        super().__init__(*a, **kw)
+        self.tokens_per_batch = tokens_per_batch
+
+    def get_train_dataloader(self) -> DataLoader:
         ds = self.train_dataset
-        return LengthGroupedSampler(
-            self.args.train_batch_size * self.args.gradient_accumulation_steps,
-            dataset=ds,
-            lengths=[int(x) for x in ds.lengths],
+        sampler = TokenBudgetSampler(ds.lengths, self.tokens_per_batch,
+                                     seed=self.args.seed)
+        return DataLoader(
+            ds,
+            batch_sampler=sampler,
+            collate_fn=self.data_collator,
+            num_workers=self.args.dataloader_num_workers,
+            pin_memory=self.args.dataloader_pin_memory,
         )
 
 
@@ -56,10 +70,16 @@ def main() -> None:
     tokenizer = PreTrainedTokenizerFast.from_pretrained(c["tokenizer_dir"])
     dataset = PackedTTSDataset(c["packed_dir"])
     model = build_model(Path(c["model_config"]), tokenizer)
+    if model.config.vocab_size < len(tokenizer):
+        raise SystemExit(
+            f"model sozlugu {model.config.vocab_size} < tokenizer {len(tokenizer)}")
+    # Prozodi kova sinirlari modelin sozlesmesinin parcasi: cikarim ayni
+    # sinirlari okumali, yoksa <|rate_k|> baska bir hizi ifade eder.
+    prosody = Prosody.load(c["packed_dir"])
 
     targs = TrainingArguments(
         output_dir=c["output_dir"],
-        per_device_train_batch_size=c.get("micro_batch", 16),
+        per_device_train_batch_size=1,  # gercek batch TokenBudgetSampler'da
         gradient_accumulation_steps=c.get("grad_accum", 4),
         num_train_epochs=c.get("epochs", 8),
         learning_rate=c.get("lr", 3e-4),
@@ -72,18 +92,25 @@ def main() -> None:
         save_steps=c.get("save_steps", 2000),
         save_total_limit=c.get("save_total_limit", 4),
         dataloader_num_workers=c.get("num_workers", 4),
+        # Trainer, modelin forward imzasinda olmayan alanlari collator'a
+        # ulasmadan siler; `label_start` bizim kayip maskemizin kaynagi.
+        remove_unused_columns=False,
         report_to=c.get("report_to", "none"),
         seed=c.get("seed", 42),
     )
-    trainer = LengthBucketTrainer(
+    trainer = TokenBudgetTrainer(
         model=model,
         args=targs,
         train_dataset=dataset,
         data_collator=TTSCollator(),
         processing_class=tokenizer,
+        tokens_per_batch=c.get("tokens_per_batch", 24576),
     )
     trainer.train(resume_from_checkpoint=args.resume)
-    trainer.save_model(str(Path(c["output_dir"]) / "final"))
+    final = Path(c["output_dir"]) / "final"
+    trainer.save_model(str(final))
+    tokenizer.save_pretrained(str(final))
+    prosody.save(final)
 
 
 if __name__ == "__main__":
